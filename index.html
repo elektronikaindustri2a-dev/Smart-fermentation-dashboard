@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nexaryn — Fermentation Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.3.4/mqtt.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <script>
+    tailwind.config = {
+      theme: { extend: { fontFamily: { display: ['Orbitron','sans-serif'], mono: ['JetBrains Mono','monospace'] } } }
+    }
+  </script>
+  <style>
+    :root { --bg-deep:#07030f; --purple-glow:#a855f7; --cyan-glow:#22d3ee; --glass-bg:rgba(255,255,255,0.04); --glass-border:rgba(255,255,255,0.08); }
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;min-height:100vh;background:var(--bg-deep);font-family:'JetBrains Mono',monospace;color:#e2e8f0;overflow-x:hidden}
+    .bg-canvas{position:fixed;inset:0;z-index:0;overflow:hidden}
+    .bg-canvas::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 80% 60% at 15% 10%,rgba(139,92,246,.22) 0%,transparent 60%),radial-gradient(ellipse 70% 50% at 85% 90%,rgba(34,211,238,.18) 0%,transparent 60%),radial-gradient(ellipse 50% 40% at 50% 50%,rgba(76,29,149,.12) 0%,transparent 70%);animation:bgPulse 8s ease-in-out infinite alternate}
+    .bg-canvas::after{content:'';position:absolute;inset:0;background-image:linear-gradient(rgba(168,85,247,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(168,85,247,.03) 1px,transparent 1px);background-size:48px 48px}
+    @keyframes bgPulse{0%{opacity:.7;transform:scale(1)}100%{opacity:1;transform:scale(1.04)}}
+    .glass{background:var(--glass-bg);border:1px solid var(--glass-border);backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);border-radius:16px;transition:border-color .3s,background .3s}
+    .glass:hover{background:rgba(255,255,255,.07);border-color:rgba(168,85,247,.25)}
+    .metric-value{font-family:'Orbitron',sans-serif;font-weight:700;background:linear-gradient(135deg,#e879f9,#22d3ee);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;line-height:1}
+    .ring-glow{position:relative;display:flex;align-items:center;justify-content:center}
+    .ring-glow svg{filter:drop-shadow(0 0 8px var(--purple-glow))}
+    .badge-ok{background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.35);color:#4ade80}
+    .badge-warn{background:rgba(234,179,8,.12);border:1px solid rgba(234,179,8,.35);color:#facc15}
+    .badge-danger{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);color:#f87171}
+    .badge-idle{background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.25);color:#94a3b8}
+    .badge-running{background:rgba(34,211,238,.12);border:1px solid rgba(34,211,238,.35);color:#22d3ee}
+    .badge-fuzzy{background:rgba(232,121,249,.15);border:1px solid rgba(232,121,249,.4);color:#e879f9}
+    .progress-bar{height:6px;border-radius:99px;background:rgba(255,255,255,.06);overflow:hidden}
+    .progress-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,#a855f7,#22d3ee);transition:width .8s cubic-bezier(.4,0,.2,1);box-shadow:0 0 10px rgba(168,85,247,.5)}
+    .pulse-dot{width:8px;height:8px;border-radius:50%;animation:pulseDot 2s ease-in-out infinite}
+    .pulse-dot.green{background:#4ade80;box-shadow:0 0 8px #4ade80}
+    .pulse-dot.gray{background:#64748b}
+    @keyframes pulseDot{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.4);opacity:.6}}
+    .modal-overlay{position:fixed;inset:0;z-index:50;background:rgba(7,3,15,.85);backdrop-filter:blur(12px);display:flex;align-items:center;justify-content:center}
+    .modal-box{width:min(480px,94vw);background:linear-gradient(145deg,rgba(30,10,60,.95),rgba(10,30,50,.95));border:1px solid rgba(168,85,247,.3);border-radius:20px;padding:36px;box-shadow:0 0 80px rgba(168,85,247,.2),0 0 40px rgba(34,211,238,.1);animation:modalIn .4s cubic-bezier(.34,1.56,.64,1)}
+    @keyframes modalIn{from{opacity:0;transform:scale(.88) translateY(20px)}to{opacity:1;transform:scale(1) translateY(0)}}
+    .glass-input{width:100%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:10px 14px;color:#e2e8f0;font-family:'JetBrains Mono',monospace;font-size:13px;outline:none;transition:border-color .2s,box-shadow .2s}
+    .glass-input:focus{border-color:rgba(168,85,247,.6);box-shadow:0 0 0 3px rgba(168,85,247,.12)}
+    .glass-input::placeholder{color:rgba(148,163,184,.5)}
+    .btn-connect{width:100%;padding:12px;border-radius:12px;font-family:'Orbitron',sans-serif;font-weight:600;font-size:13px;letter-spacing:.08em;background:linear-gradient(135deg,#7c3aed,#0891b2);border:none;cursor:pointer;color:#fff;transition:opacity .2s,transform .15s,box-shadow .2s;box-shadow:0 0 30px rgba(124,58,237,.4)}
+    .btn-connect:hover{opacity:.9;transform:translateY(-1px);box-shadow:0 0 40px rgba(124,58,237,.6)}
+    .btn-connect:disabled{opacity:.5;cursor:not-allowed;transform:none}
+    .cmd-btn{flex:1;padding:10px 14px;border-radius:10px;font-family:'Orbitron',sans-serif;font-size:11px;font-weight:600;letter-spacing:.06em;border:1px solid;cursor:pointer;transition:all .2s}
+    .cmd-btn-on{background:rgba(34,211,238,.1);border-color:rgba(34,211,238,.4);color:#22d3ee}
+    .cmd-btn-on:hover{background:rgba(34,211,238,.2);box-shadow:0 0 20px rgba(34,211,238,.3)}
+    .cmd-btn-off{background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.4);color:#f87171}
+    .cmd-btn-off:hover{background:rgba(239,68,68,.2);box-shadow:0 0 20px rgba(239,68,68,.3)}
+    .cmd-btn-reset{background:rgba(234,179,8,.1);border-color:rgba(234,179,8,.4);color:#facc15}
+    .cmd-btn-reset:hover{background:rgba(234,179,8,.2);box-shadow:0 0 20px rgba(234,179,8,.3)}
+    .cmd-btn-csv{background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.4);color:#4ade80}
+    .cmd-btn-csv:hover{background:rgba(74,222,128,.2);box-shadow:0 0 20px rgba(74,222,128,.3)}
+    /* MODE SELECTOR */
+    .mode-selector{display:flex;gap:6px;padding:4px;background:rgba(0,0,0,.3);border-radius:12px;border:1px solid rgba(255,255,255,.08)}
+    .mode-btn{flex:1;padding:8px 20px;border-radius:9px;font-family:'Orbitron',sans-serif;font-size:11px;font-weight:700;letter-spacing:.08em;border:none;cursor:pointer;transition:all .3s}
+    .mode-btn.pid-active{background:linear-gradient(135deg,rgba(168,85,247,.5),rgba(99,102,241,.5));color:#e2e8f0;box-shadow:0 0 20px rgba(168,85,247,.4)}
+    .mode-btn.fuzzy-active{background:linear-gradient(135deg,rgba(34,211,238,.4),rgba(232,121,249,.4));color:#e2e8f0;box-shadow:0 0 20px rgba(34,211,238,.4)}
+    .mode-btn.inactive{background:transparent;color:#4b5563}
+    .mode-btn.inactive:hover{color:#94a3b8;background:rgba(255,255,255,.05)}
+    .mode-btn:disabled{opacity:.4;cursor:not-allowed}
+    .banner-pid{background:linear-gradient(90deg,rgba(168,85,247,.12),rgba(99,102,241,.07)) !important;border-color:rgba(168,85,247,.4) !important}
+    .banner-fuzzy{background:linear-gradient(90deg,rgba(34,211,238,.1),rgba(232,121,249,.08)) !important;border-color:rgba(34,211,238,.4) !important}
+    .gauge-svg .track{stroke:rgba(255,255,255,.06)}
+    .gauge-svg .fill{stroke:url(#gaugeGrad);stroke-linecap:round;transition:stroke-dashoffset .9s cubic-bezier(.4,0,.2,1);filter:drop-shadow(0 0 6px rgba(168,85,247,.7))}
+    #toast{position:fixed;bottom:24px;right:24px;z-index:100;display:flex;flex-direction:column;gap:8px}
+    .toast-item{background:rgba(20,10,40,.95);border:1px solid rgba(168,85,247,.35);border-radius:10px;padding:10px 16px;font-size:12px;color:#e2e8f0;animation:toastIn .3s ease;backdrop-filter:blur(10px)}
+    @keyframes toastIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
+    .log-box{height:140px;overflow-y:auto;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:10px 12px;font-size:11px;color:#64748b}
+    .log-box p{margin:0 0 3px}
+    .log-box p.info{color:#22d3ee}
+    .log-box p.ok{color:#4ade80}
+    .log-box p.warn{color:#facc15}
+    .log-box p.err{color:#f87171}
+    .sp-input{width:70px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:6px 10px;color:#e2e8f0;font-family:'JetBrains Mono',monospace;font-size:13px;outline:none;text-align:center;transition:border-color .2s}
+    .sp-input:focus{border-color:rgba(168,85,247,.6)}
+    .sp-btn{padding:6px 12px;border-radius:8px;font-family:'Orbitron',sans-serif;font-size:10px;font-weight:600;background:rgba(168,85,247,.15);border:1px solid rgba(168,85,247,.4);color:#c084fc;cursor:pointer;transition:all .2s}
+    .sp-btn:hover{background:rgba(168,85,247,.3)}
+    ::-webkit-scrollbar{width:4px}
+    ::-webkit-scrollbar-thumb{background:rgba(168,85,247,.4);border-radius:99px}
+    .header-title{font-family:'Orbitron',sans-serif;font-weight:900;font-size:clamp(18px,3vw,26px);background:linear-gradient(90deg,#e879f9,#a855f7,#22d3ee,#a855f7,#e879f9);background-size:300% 100%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:shimmer 5s linear infinite}
+    @keyframes shimmer{0%{background-position:0% 50%}100%{background-position:300% 50%}}
+    .fade-in{animation:fadeIn .5s ease both}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+    .content-wrap{position:relative;z-index:1}
+    @media(max-width:640px){.modal-box{padding:24px 18px}}
+  </style>
+</head>
+<body>
+<div class="bg-canvas"></div>
+
+<!-- MQTT MODAL -->
+<div id="mqttModal" class="modal-overlay">
+  <div class="modal-box">
+    <div class="flex items-center gap-3 mb-6">
+      <div class="w-10 h-10 rounded-xl flex items-center justify-center" style="background:linear-gradient(135deg,#7c3aed,#0891b2)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      </div>
+      <div>
+        <h2 style="font-family:'Orbitron',sans-serif;font-size:18px;font-weight:700;color:#fff">MQTT Connection</h2>
+        <p style="font-size:11px;color:#64748b">Nexaryn Fermentation Dashboard</p>
+      </div>
+    </div>
+    <div class="space-y-3">
+      <div class="grid grid-cols-3 gap-2">
+        <div class="col-span-2">
+          <label class="block mb-1" style="font-size:11px;color:#94a3b8">HOSTNAME / IP</label>
+          <input id="mqttHost" class="glass-input" type="text" placeholder="hostname / IP" />
+        </div>
+        <div>
+          <label class="block mb-1" style="font-size:11px;color:#94a3b8">PORT (WS)</label>
+          <input id="mqttPort" class="glass-input" type="number" placeholder="port" />
+        </div>
+      </div>
+      <div>
+        <label class="block mb-1" style="font-size:11px;color:#94a3b8">USERNAME</label>
+        <input id="mqttUser" class="glass-input" type="text" placeholder="username" />
+      </div>
+      <div>
+        <label class="block mb-1" style="font-size:11px;color:#94a3b8">PASSWORD</label>
+        <input id="mqttPass" class="glass-input" type="password" placeholder="password" />
+      </div>
+      <div class="flex items-center gap-2 pt-1">
+        <input id="rememberCreds" type="checkbox" style="accent-color:#a855f7;width:16px;height:16px" />
+        <label for="rememberCreds" style="font-size:12px;color:#94a3b8;cursor:pointer">Remember credentials</label>
+      </div>
+      <div id="modalStatus" class="hidden" style="font-size:12px;padding:8px 12px;border-radius:8px;"></div>
+      <button id="btnConnect" class="btn-connect mt-2" onclick="connectMQTT()">&#x27F6; CONNECT MQTT</button>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="content-wrap min-h-screen p-4 md:p-6 lg:p-8">
+
+  <!-- HEADER -->
+  <header class="flex flex-wrap items-center justify-between gap-4 mb-5 fade-in">
+    <div>
+      <h1 class="header-title">NEXARYN FERMENTATION CTRL</h1>
+      <p style="font-size:11px;color:#64748b;margin-top:4px">Room 1 — Smart Controller Dashboard</p>
+    </div>
+    <div class="flex flex-wrap items-center gap-3">
+      <div id="connStatus" class="flex items-center gap-2 px-3 py-2 rounded-xl" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08)">
+        <div id="connDot" class="pulse-dot gray"></div>
+        <span id="connLabel" style="font-size:11px;color:#64748b;font-family:'Orbitron',sans-serif">DISCONNECTED</span>
+      </div>
+      <button onclick="showModal()" style="padding:8px 14px;border-radius:10px;background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.35);color:#c084fc;font-size:11px;font-family:'Orbitron',sans-serif;cursor:pointer;transition:all .2s" onmouseover="this.style.background='rgba(168,85,247,.22)'" onmouseout="this.style.background='rgba(168,85,247,.12)'">&#x2699; CONFIG</button>
+    </div>
+  </header>
+
+  <!-- CONTROLLER MODE SELECTOR -->
+  <div class="glass p-4 mb-5 fade-in banner-pid" id="modeBanner">
+    <div class="flex flex-wrap items-center justify-between gap-4">
+      <div>
+        <p style="font-size:10px;letter-spacing:.12em;color:#94a3b8;font-family:'Orbitron',sans-serif;margin-bottom:4px">CONTROLLER MODE</p>
+        <div class="flex items-center gap-2 mb-1">
+          <span id="modeLabel" style="font-family:'Orbitron',sans-serif;font-size:18px;font-weight:700;color:#c084fc">ONLINE [PID]</span>
+          <span id="modeSrcBadge" class="badge-idle px-2 py-0.5 rounded-md" style="font-size:10px">OFFLINE DEFAULT</span>
+        </div>
+        <p id="modeDesc" style="font-size:11px;color:#64748b">Controller default saat offline. Hanya bisa diganti saat online via dashboard.</p>
+      </div>
+      <div class="flex flex-col items-end gap-2">
+        <div class="mode-selector">
+          <button id="btnModePID" class="mode-btn pid-active" onclick="sendMode('PID')" disabled>&#x2699; PID</button>
+          <button id="btnModeFUZZY" class="mode-btn inactive" onclick="sendMode('FUZZY')" disabled>&#x25C8; FUZZY</button>
+        </div>
+        <p id="modeSelectorHint" style="font-size:10px;color:#475569;text-align:right">Hubungkan MQTT untuk mengganti mode</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- METRICS ROW -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+    <!-- Temperature -->
+    <div class="glass p-5 fade-in" style="animation-delay:.05s">
+      <div class="flex items-start justify-between mb-4">
+        <div>
+          <p style="font-size:10px;letter-spacing:.12em;color:#94a3b8;font-family:'Orbitron',sans-serif">TEMPERATURE</p>
+          <div id="tempVal" class="metric-value mt-1" style="font-size:clamp(28px,4vw,40px)">--.-</div>
+          <span style="font-size:13px;color:#94a3b8">&#x00B0;C</span>
+        </div>
+        <div class="ring-glow" style="flex-shrink:0">
+          <svg class="gauge-svg" width="72" height="72" viewBox="0 0 72 72">
+            <defs><linearGradient id="gaugeGrad" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#a855f7"/><stop offset="100%" stop-color="#22d3ee"/></linearGradient></defs>
+            <circle class="track" cx="36" cy="36" r="28" fill="none" stroke-width="6"/>
+            <circle id="tempGauge" class="fill" cx="36" cy="36" r="28" fill="none" stroke-width="6" stroke-dasharray="175.9" stroke-dashoffset="175.9" transform="rotate(-90 36 36)"/>
+          </svg>
+        </div>
+      </div>
+      <div class="progress-bar mb-2"><div id="tempBar" class="progress-fill" style="width:0%"></div></div>
+      <div class="flex justify-between items-center" style="font-size:10px;color:#64748b">
+        <span>0&#x00B0;C</span>
+        <span id="statusTemp" class="badge-idle px-2 py-0.5 rounded-md" style="font-size:10px">---</span>
+        <span>100&#x00B0;C</span>
+      </div>
+    </div>
+    <!-- Humidity -->
+    <div class="glass p-5 fade-in" style="animation-delay:.1s">
+      <div class="flex items-start justify-between mb-4">
+        <div>
+          <p style="font-size:10px;letter-spacing:.12em;color:#94a3b8;font-family:'Orbitron',sans-serif">HUMIDITY</p>
+          <div id="humVal" class="metric-value mt-1" style="font-size:clamp(28px,4vw,40px)">--.-</div>
+          <span style="font-size:13px;color:#94a3b8">%</span>
+        </div>
+        <div class="ring-glow" style="flex-shrink:0">
+          <svg class="gauge-svg" width="72" height="72" viewBox="0 0 72 72">
+            <circle class="track" cx="36" cy="36" r="28" fill="none" stroke-width="6"/>
+            <circle id="humGauge" class="fill" cx="36" cy="36" r="28" fill="none" stroke-width="6" stroke-dasharray="175.9" stroke-dashoffset="175.9" transform="rotate(-90 36 36)"/>
+          </svg>
+        </div>
+      </div>
+      <div class="progress-bar mb-2"><div id="humBar" class="progress-fill" style="width:0%"></div></div>
+      <div class="flex justify-between items-center" style="font-size:10px;color:#64748b">
+        <span>0%</span>
+        <span id="statusHum" class="badge-idle px-2 py-0.5 rounded-md" style="font-size:10px">---</span>
+        <span>100%</span>
+      </div>
+    </div>
+    <!-- Heater -->
+    <div class="glass p-5 fade-in" style="animation-delay:.15s">
+      <p style="font-size:10px;letter-spacing:.12em;color:#94a3b8;font-family:'Orbitron',sans-serif;margin-bottom:8px">HEATER OUTPUT</p>
+      <div id="heaterVal" class="metric-value mb-3" style="font-size:clamp(28px,4vw,40px)">--<span style="font-size:16px">%</span></div>
+      <div class="progress-bar mb-3"><div id="heaterBar" class="progress-fill" style="width:0%;background:linear-gradient(90deg,#7c3aed,#e879f9)"></div></div>
+      <div style="font-size:11px;color:#64748b">
+        <span>SSR Slow-PWM</span>
+        <div class="flex items-center gap-2 mt-2">
+          <div id="ssrDot" class="pulse-dot gray" style="animation:none"></div>
+          <span id="ssrStatus" style="font-size:11px;color:#64748b">IDLE</span>
+        </div>
+      </div>
+    </div>
+    <!-- Fan -->
+    <div class="glass p-5 fade-in" style="animation-delay:.2s">
+      <p style="font-size:10px;letter-spacing:.12em;color:#94a3b8;font-family:'Orbitron',sans-serif;margin-bottom:8px">FAN SPEED</p>
+      <div id="fanVal" class="metric-value mb-3" style="font-size:clamp(28px,4vw,40px)">--<span style="font-size:16px">%</span></div>
+      <div class="progress-bar mb-3"><div id="fanBar" class="progress-fill" style="width:0%;background:linear-gradient(90deg,#0891b2,#22d3ee)"></div></div>
+      <div style="font-size:11px;color:#64748b">
+        <span>Humidity Control Fan</span>
+        <div class="mt-2"><div id="fanDots" class="flex gap-1 mt-1"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MIDDLE ROW -->
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+    <!-- Setpoint -->
+    <div class="glass p-5 fade-in lg:col-span-1" style="animation-delay:.25s">
+      <p style="font-size:10px;letter-spacing:.12em;color:#94a3b8;font-family:'Orbitron',sans-serif;margin-bottom:16px">SETPOINT &amp; ERROR</p>
+      <div class="space-y-4">
+        <div>
+          <div class="flex justify-between items-center mb-2">
+            <span style="font-size:11px;color:#94a3b8">Temp Setpoint</span>
+            <div class="flex items-center gap-2">
+              <input id="spTempInput" class="sp-input" type="number" step="0.5" value="30.0" />
+              <button class="sp-btn" onclick="sendSetpointTemp()">SET</button>
+            </div>
+          </div>
+          <div class="flex justify-between" style="font-size:11px">
+            <span style="color:#64748b">Current SP:</span>
+            <span id="spTempVal" style="color:#e879f9;font-family:'Orbitron',sans-serif">30.00&#x00B0;C</span>
+          </div>
+          <div class="flex justify-between mt-1" style="font-size:11px">
+            <span style="color:#64748b">Error:</span>
+            <span id="errTempVal" style="color:#22d3ee;font-family:'Orbitron',sans-serif">-- &#x00B0;C</span>
+          </div>
+        </div>
+        <div style="border-top:1px solid rgba(255,255,255,.06)"></div>
+        <div>
+          <div class="flex justify-between items-center mb-2">
+            <span style="font-size:11px;color:#94a3b8">Hum Setpoint</span>
+            <div class="flex items-center gap-2">
+              <input id="spHumInput" class="sp-input" type="number" step="1" value="60" />
+              <button class="sp-btn" onclick="sendSetpointHum()">SET</button>
+            </div>
+          </div>
+          <div class="flex justify-between" style="font-size:11px">
+            <span style="color:#64748b">Current SP:</span>
+            <span id="spHumVal" style="color:#e879f9;font-family:'Orbitron',sans-serif">60.00%</span>
+          </div>
+          <div class="flex justify-between mt-1" style="font-size:11px">
+            <span style="color:#64748b">Error:</span>
+            <span id="errHumVal" style="color:#22d3ee;font-family:'Orbitron',sans-serif">-- %</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Output Panel (dinamis PID/Fuzzy) -->
+    <div class="glass p-5 fade-in lg:col-span-1" style="animation-delay:.3s">
+      <!-- PID Panel -->
+      <div id="panelPID">
+        <p style="font-size:10px;letter-spacing:.12em;color:#94a3b8;font-family:'Orbitron',sans-serif;margin-bottom:12px">PID OUTPUT</p>
+        <div style="position:relative;height:70px;margin-bottom:8px">
+          <div style="position:absolute;inset:0;background:linear-gradient(90deg,rgba(239,68,68,.1),rgba(168,85,247,.1),rgba(34,211,238,.1));border-radius:10px;border:1px solid rgba(255,255,255,.06)"></div>
+          <div id="pidOutPointer" style="position:absolute;top:50%;width:2px;height:60%;background:linear-gradient(to bottom,#e879f9,#22d3ee);border-radius:2px;transform:translateY(-50%) translateX(-50%);transition:left .9s cubic-bezier(.4,0,.2,1);left:50%;box-shadow:0 0 10px rgba(232,121,249,.8)"></div>
+          <div style="position:absolute;bottom:6px;left:8px;font-size:9px;color:#ef4444;font-family:'Orbitron',sans-serif">0%</div>
+          <div style="position:absolute;bottom:6px;right:8px;font-size:9px;color:#22d3ee;font-family:'Orbitron',sans-serif">100%</div>
+          <div id="pidOutVal" class="metric-value" style="font-size:28px;position:relative;display:flex;align-items:center;justify-content:center;height:100%">--</div>
+        </div>
+        <p style="font-size:10px;color:#64748b;text-align:center;margin-bottom:10px">Heater PWM output (%)</p>
+        <div class="grid grid-cols-3 gap-2 mb-1" style="font-size:10px">
+          <div class="text-center p-2 rounded-lg" style="background:rgba(168,85,247,.08);border:1px solid rgba(168,85,247,.2)">
+            <div style="color:#64748b">P</div><div id="pidP" style="color:#c084fc;font-family:'Orbitron',sans-serif">--</div>
+          </div>
+          <div class="text-center p-2 rounded-lg" style="background:rgba(34,211,238,.08);border:1px solid rgba(34,211,238,.2)">
+            <div style="color:#64748b">I</div><div id="pidI" style="color:#22d3ee;font-family:'Orbitron',sans-serif">--</div>
+          </div>
+          <div class="text-center p-2 rounded-lg" style="background:rgba(232,121,249,.08);border:1px solid rgba(232,121,249,.2)">
+            <div style="color:#64748b">D</div><div id="pidD" style="color:#e879f9;font-family:'Orbitron',sans-serif">--</div>
+          </div>
+        </div>
+      </div>
+      <!-- Fuzzy Panel -->
+      <div id="panelFUZZY" style="display:none">
+        <p style="font-size:10px;letter-spacing:.12em;color:#22d3ee;font-family:'Orbitron',sans-serif;margin-bottom:12px">FUZZY MAMDANI OUTPUT</p>
+        <div style="position:relative;height:70px;margin-bottom:8px">
+          <div style="position:absolute;inset:0;background:linear-gradient(90deg,rgba(239,68,68,.1),rgba(34,211,238,.1),rgba(168,85,247,.1));border-radius:10px;border:1px solid rgba(255,255,255,.06)"></div>
+          <div id="fuzzyOutPointer" style="position:absolute;top:50%;width:2px;height:60%;background:linear-gradient(to bottom,#22d3ee,#e879f9);border-radius:2px;transform:translateY(-50%) translateX(-50%);transition:left .9s cubic-bezier(.4,0,.2,1);left:50%;box-shadow:0 0 10px rgba(34,211,238,.8)"></div>
+          <div style="position:absolute;bottom:6px;left:8px;font-size:9px;color:#ef4444;font-family:'Orbitron',sans-serif">-85</div>
+          <div style="position:absolute;bottom:6px;left:50%;transform:translateX(-50%);font-size:9px;color:#64748b;font-family:'Orbitron',sans-serif">0</div>
+          <div style="position:absolute;bottom:6px;right:8px;font-size:9px;color:#22d3ee;font-family:'Orbitron',sans-serif">+85</div>
+          <div id="fuzzyOutVal" class="metric-value" style="font-size:24px;position:relative;display:flex;align-items:center;justify-content:center;height:100%">--.-</div>
+        </div>
+        <p style="font-size:10px;color:#64748b;text-align:center;margin-bottom:10px">Centroid defuzzification output</p>
+        <div class="flex items-center justify-center gap-2 p-2 rounded-lg" style="background:rgba(34,211,238,.06);border:1px solid rgba(34,211,238,.2)">
+          <span style="font-size:10px;color:#64748b">Heater PWM:</span>
+          <span id="fuzzyHeaterMapped" style="font-size:14px;font-family:'Orbitron',sans-serif;color:#22d3ee">--%</span>
+        </div>
+      </div>
+      <!-- System Control (shared) -->
+      <div style="border-top:1px solid rgba(255,255,255,.06);padding-top:14px;margin-top:14px">
+        <p style="font-size:10px;letter-spacing:.12em;color:#94a3b8;font-family:'Orbitron',sans-serif;margin-bottom:10px">SYSTEM CONTROL</p>
+        <div class="flex gap-2">
+          <button class="cmd-btn cmd-btn-on" onclick="sendCmd('ON')">&#x25B6; START</button>
+          <button class="cmd-btn cmd-btn-off" onclick="sendCmd('OFF')">&#x25A0; STOP</button>
+          <button class="cmd-btn cmd-btn-reset" onclick="sendCmd('RESET')">&#x21BA; RESET</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status -->
+    <div class="glass p-5 fade-in lg:col-span-1" style="animation-delay:.35s">
+      <p style="font-size:10px;letter-spacing:.12em;color:#94a3b8;font-family:'Orbitron',sans-serif;margin-bottom:16px">SYSTEM STATUS</p>
+      <div class="space-y-3">
+        <div class="flex items-center justify-between p-3 rounded-xl" style="background:rgba(0,0,0,.2)">
+          <span style="font-size:11px;color:#94a3b8">System</span>
+          <span id="sysStatusBadge" class="badge-idle px-3 py-1 rounded-lg" style="font-size:11px;font-family:'Orbitron',sans-serif">---</span>
+        </div>
+        <div class="flex items-center justify-between p-3 rounded-xl" style="background:rgba(0,0,0,.2)">
+          <span style="font-size:11px;color:#94a3b8">Controller</span>
+          <span id="ctrlModeBadge" class="badge-idle px-3 py-1 rounded-lg" style="font-size:11px;font-family:'Orbitron',sans-serif">---</span>
+        </div>
+        <div class="flex items-center justify-between p-3 rounded-xl" style="background:rgba(0,0,0,.2)">
+          <span style="font-size:11px;color:#94a3b8">Temperature</span>
+          <span id="tempStatusBadge" class="badge-idle px-3 py-1 rounded-lg" style="font-size:11px">---</span>
+        </div>
+        <div class="flex items-center justify-between p-3 rounded-xl" style="background:rgba(0,0,0,.2)">
+          <span style="font-size:11px;color:#94a3b8">Humidity</span>
+          <span id="humStatusBadge" class="badge-idle px-3 py-1 rounded-lg" style="font-size:11px">---</span>
+        </div>
+        <div class="flex items-center justify-between p-3 rounded-xl" style="background:rgba(0,0,0,.2)">
+          <span style="font-size:11px;color:#94a3b8">SP Source</span>
+          <span id="spSourceBadge" class="badge-idle px-3 py-1 rounded-lg" style="font-size:11px">---</span>
+        </div>
+        <div class="flex items-center justify-between p-3 rounded-xl" style="background:rgba(0,0,0,.2)">
+          <span style="font-size:11px;color:#94a3b8">Last Update</span>
+          <span id="lastUpdate" style="font-size:11px;color:#22d3ee;font-family:'JetBrains Mono',monospace">---</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Duration Info -->
+  <div class="glass p-3 mb-4 fade-in" style="animation-delay:.38s">
+    <div class="flex flex-wrap items-center gap-3">
+      <p style="font-size:10px;letter-spacing:.12em;color:#94a3b8;font-family:'Orbitron',sans-serif;white-space:nowrap">DURASI PENCAPAIAN SETPOINT</p>
+      <div id="durationInfo" style="font-size:12px;color:#64748b;flex:1">Menunggu kontrol aktif...</div>
+      <button onclick="resetDuration()" style="padding:4px 10px;border-radius:8px;font-size:10px;font-family:'Orbitron',sans-serif;background:rgba(168,85,247,.1);border:1px solid rgba(168,85,247,.3);color:#c084fc;cursor:pointer">&#x21BA; RESET LOG</button>
+    </div>
+  </div>
+
+  <!-- History Table -->
+  <div class="glass p-4 mb-4 fade-in" style="animation-delay:.40s">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+      <div class="flex items-center gap-2">
+        <p style="font-size:10px;letter-spacing:.12em;color:#94a3b8;font-family:'Orbitron',sans-serif">HISTORY DURASI</p>
+        <span id="historyCount" class="badge-idle px-2 py-0.5 rounded-md" style="font-size:10px">0 entri</span>
+      </div>
+      <button onclick="downloadHistoryCSV()" style="padding:5px 12px;border-radius:8px;font-size:10px;font-family:'Orbitron',sans-serif;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.3);color:#4ade80;cursor:pointer">&#x2B07; CSV HISTORY</button>
+    </div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead>
+          <tr style="border-bottom:1px solid rgba(255,255,255,.08)">
+            <th style="text-align:left;padding:6px 8px;color:#64748b;font-size:9px;letter-spacing:.08em;font-family:'Orbitron',sans-serif">UPTIME</th>
+            <th style="text-align:left;padding:6px 8px;color:#64748b;font-size:9px;letter-spacing:.08em;font-family:'Orbitron',sans-serif">MODE</th>
+            <th style="text-align:left;padding:6px 8px;color:#64748b;font-size:9px;letter-spacing:.08em;font-family:'Orbitron',sans-serif">SETPOINT</th>
+            <th style="text-align:left;padding:6px 8px;color:#64748b;font-size:9px;letter-spacing:.08em;font-family:'Orbitron',sans-serif">SUHU AWAL → AKHIR</th>
+            <th style="text-align:left;padding:6px 8px;color:#64748b;font-size:9px;letter-spacing:.08em;font-family:'Orbitron',sans-serif">DURASI</th>
+            <th style="text-align:left;padding:6px 8px;color:#64748b;font-size:9px;letter-spacing:.08em;font-family:'Orbitron',sans-serif">STATUS</th>
+          </tr>
+        </thead>
+        <tbody id="historyTableBody">
+          <tr><td colspan="6" style="color:#475569;text-align:center;padding:12px;font-size:11px">Belum ada history</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Chart + Log -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+    <div class="glass p-5 fade-in" style="animation-delay:.4s">
+      <div class="flex items-center justify-between mb-4">
+        <p style="font-size:10px;letter-spacing:.12em;color:#94a3b8;font-family:'Orbitron',sans-serif">REALTIME TREND</p>
+        <div class="flex gap-3" style="font-size:10px"><span style="color:#e879f9">&#9679; Temp</span><span style="color:#22d3ee">&#9679; Humidity</span></div>
+      </div>
+      <canvas id="trendChart" height="120" style="width:100%;border-radius:8px"></canvas>
+    </div>
+    <div class="glass p-5 fade-in" style="animation-delay:.45s">
+      <div class="flex items-center justify-between mb-3">
+        <p style="font-size:10px;letter-spacing:.12em;color:#94a3b8;font-family:'Orbitron',sans-serif">MQTT EVENT LOG</p>
+        <button onclick="clearLog()" style="font-size:10px;color:#64748b;cursor:pointer;background:none;border:none;padding:0">clear</button>
+      </div>
+      <div id="logBox" class="log-box"></div>
+    </div>
+  </div>
+
+  <!-- CSV -->
+  <div class="glass p-4 mb-4 fade-in" style="animation-delay:.5s">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <p style="font-size:10px;letter-spacing:.12em;color:#94a3b8;font-family:'Orbitron',sans-serif">DATA EXPORT</p>
+        <p style="font-size:11px;color:#64748b;margin-top:2px">CSV Lengkap: semua kolom &nbsp;|&nbsp; <span style="color:#c084fc">Histori: waktu, suhu, setpoint, mode</span></p>
+      </div>
+      <div class="flex items-center gap-3 flex-wrap">
+        <span id="csvCount" style="font-size:11px;color:#64748b">0 record</span>
+        <button class="cmd-btn cmd-btn-csv" style="flex:none;padding:8px 16px" onclick="downloadCSV()">&#x2193; UNDUH CSV LENGKAP</button>
+        <button onclick="downloadSensorCSV()" style="flex:none;padding:8px 16px;border-radius:10px;font-family:'Orbitron',sans-serif;font-size:11px;font-weight:600;letter-spacing:.06em;background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.4);color:#c084fc;cursor:pointer;transition:all .2s" onmouseover="this.style.background='rgba(168,85,247,.25)'" onmouseout="this.style.background='rgba(168,85,247,.12)'">&#x2BC0; UNDUH HISTORI</button>
+        <button onclick="clearCSV()" style="padding:8px 12px;border-radius:10px;font-size:10px;font-family:'Orbitron',sans-serif;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);color:#f87171;cursor:pointer">&#x2715; HAPUS</button>
+      </div>
+    </div>
+  </div>
+
+  <footer class="text-center fade-in" style="font-size:10px;color:#334155;padding:4px 0 20px">
+    nexaryn/room1 &mdash; Unified PID+Fuzzy Controller &middot; Topic: <span style="color:#a855f7">nexaryn/room1/telemetry</span>
+  </footer>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ═══ TOPICS ═══
+const T = {
+  TELEMETRY:    'nexaryn/room1/telemetry',
+  STATUS:       'nexaryn/room1/status',
+  CMD_SYSTEM:   'nexaryn/room1/cmd/system',
+  CMD_MODE:     'nexaryn/room1/cmd/mode',
+  CMD_SET_TEMP: 'nexaryn/room1/cmd/setpoint/temp',
+  CMD_SET_HUM:  'nexaryn/room1/cmd/setpoint/humidity',
+  CMD_RESET:    'nexaryn/room1/cmd/reset',
+  HISTORY:      'nexaryn/room1/history',
+  DURATION:     'nexaryn/room1/duration',
+  CMD_CLEARLOG: 'nexaryn/room1/cmd/clearlog',
+};
+
+// ═══ STATE ═══
+const MAX_TREND = 40;
+let trendTemp=[], trendHum=[], trendLabels=[];
+let chartCanvas=null, chartCtx=null;
+let csvData=[];
+let mqttClient=null;
+let currentMode='PID';
+// Duration & History (dari ESP32 via MQTT retained)
+let durState={aktif:false,t0:0,dur:-1,ok:false};   // state durasi saat ini
+let historyData=[];  // array history dari ESP32
+
+// ═══ TOAST & LOG ═══
+function toast(msg, type='info') {
+  const colors={info:'rgba(34,211,238,.15)',ok:'rgba(74,222,128,.15)',warn:'rgba(250,204,21,.15)',err:'rgba(248,113,113,.15)'};
+  const el=document.createElement('div'); el.className='toast-item';
+  el.style.borderColor=type==='ok'?'rgba(74,222,128,.35)':type==='err'?'rgba(248,113,113,.35)':type==='warn'?'rgba(250,204,21,.35)':'rgba(168,85,247,.35)';
+  el.style.background=colors[type]||colors.info; el.textContent=msg;
+  document.getElementById('toast').appendChild(el);
+  setTimeout(()=>el.remove(),4000);
+}
+function log(msg,cls='info'){
+  const box=document.getElementById('logBox');
+  const p=document.createElement('p'); p.className=cls;
+  p.textContent=`[${new Date().toLocaleTimeString('id-ID')}] ${msg}`;
+  box.prepend(p); if(box.children.length>120) box.lastChild.remove();
+}
+function clearLog(){document.getElementById('logBox').innerHTML='';}
+
+// ═══ MODE UI ═══
+function updateModeUI(mode) {
+  currentMode = mode.toUpperCase();
+  const isFuzzy = currentMode==='FUZZY';
+  document.getElementById('btnModePID').className  ='mode-btn '+(isFuzzy?'inactive':'pid-active');
+  document.getElementById('btnModeFUZZY').className='mode-btn '+(isFuzzy?'fuzzy-active':'inactive');
+  const banner=document.getElementById('modeBanner');
+  banner.className='glass p-4 mb-5 fade-in '+(isFuzzy?'banner-fuzzy':'banner-pid');
+  document.getElementById('modeLabel').textContent=(mqttClient&&mqttClient.connected?'ONLINE ['+currentMode+']':currentMode);
+  document.getElementById('modeLabel').style.color=isFuzzy?'#22d3ee':'#c084fc';
+  document.getElementById('modeDesc').textContent=isFuzzy
+    ?'Fuzzy Mamdani — 3 input (error, integral, delta), 27 rules, centroid defuzz.'
+    :'PID Klasik — Proportional + Integral + Derivative dengan anti-windup.';
+  document.getElementById('panelPID').style.display   =isFuzzy?'none':'block';
+  document.getElementById('panelFUZZY').style.display =isFuzzy?'block':'none';
+  const cb=document.getElementById('ctrlModeBadge');
+  cb.textContent=currentMode;
+  cb.className=isFuzzy?'badge-fuzzy px-3 py-1 rounded-lg':'badge-running px-3 py-1 rounded-lg';
+}
+function enableModeSelector(enable) {
+  document.getElementById('btnModePID').disabled  =!enable;
+  document.getElementById('btnModeFUZZY').disabled=!enable;
+  document.getElementById('modeSelectorHint').textContent=enable
+    ?'Pilih controller — perubahan langsung diterapkan ke ESP32'
+    :'Hubungkan MQTT untuk mengganti mode';
+  const sb=document.getElementById('modeSrcBadge');
+  sb.textContent=enable?'ONLINE · DAPAT DIGANTI':'OFFLINE DEFAULT';
+  sb.className=enable?'badge-running px-2 py-0.5 rounded-md':'badge-idle px-2 py-0.5 rounded-md';
+  const lbl=document.getElementById('modeLabel');
+  if(lbl) lbl.textContent=enable?'ONLINE ['+currentMode+']':currentMode;
+}
+
+// ═══ CREDENTIALS ═══
+function loadSavedCreds(){
+  try{const c=JSON.parse(localStorage.getItem('mqttCreds')||'{}');
+    if(c.host) document.getElementById('mqttHost').value=c.host;
+    if(c.port) document.getElementById('mqttPort').value=c.port;
+    if(c.user) document.getElementById('mqttUser').value=c.user;
+    if(c.pass) document.getElementById('mqttPass').value=c.pass;
+    if(c.remember) document.getElementById('rememberCreds').checked=true;
+  }catch(e){}
+}
+function showModal(){document.getElementById('mqttModal').style.display='flex';}
+function hideModal(){document.getElementById('mqttModal').style.display='none';}
+function setModalStatus(msg,ok=null){
+  const el=document.getElementById('modalStatus'); el.classList.remove('hidden');
+  el.textContent=msg;
+  el.style.background=ok===true?'rgba(74,222,128,.1)':ok===false?'rgba(248,113,113,.1)':'rgba(34,211,238,.1)';
+  el.style.border=ok===true?'1px solid rgba(74,222,128,.35)':ok===false?'1px solid rgba(248,113,113,.35)':'1px solid rgba(34,211,238,.35)';
+  el.style.color=ok===true?'#4ade80':ok===false?'#f87171':'#22d3ee';
+}
+
+// ═══ MQTT ═══
+let noDataWatchdog=null;
+let firstTelemetryReceived=false;
+function connectMQTT(){
+  const host=document.getElementById('mqttHost').value.trim();
+  const port=parseInt(document.getElementById('mqttPort').value)||9001;
+  const user=document.getElementById('mqttUser').value.trim();
+  const pass=document.getElementById('mqttPass').value;
+  const remember=document.getElementById('rememberCreds').checked;
+  if(!host){setModalStatus('Hostname tidak boleh kosong',false);return;}
+  if(remember) localStorage.setItem('mqttCreds',JSON.stringify({host,port,user,pass,remember:true}));
+  else localStorage.removeItem('mqttCreds');
+  if(mqttClient){try{mqttClient.end(true);}catch(e){}}
+  firstTelemetryReceived=false;
+  if(noDataWatchdog) clearTimeout(noDataWatchdog);
+  const btn=document.getElementById('btnConnect');
+  btn.disabled=true; btn.textContent='CONNECTING...';
+  // Peringatan dini: halaman HTTPS tidak bisa membuka koneksi ws:// (mixed content) — wajib wss://
+  if(location.protocol==='https:'){
+    log('Halaman ini dibuka via HTTPS — broker harus mendukung WSS (TLS), bukan WS biasa, atau buka dashboard via HTTP/file lokal.','warn');
+  }
+  setModalStatus('Menghubungkan ke '+host+':'+port+' ...',null);
+  const url=`ws://${host}:${port}/mqtt`;
+  const clientId='nexaryn_dash_'+Math.random().toString(16).slice(2,8);
+  const opts={clientId,clean:true,reconnectPeriod:0,connectTimeout:8000};
+  if(user) opts.username=user;
+  if(pass) opts.password=pass;
+  log('Mencoba koneksi ke '+url,'info');
+  try{mqttClient=mqtt.connect(url,opts);}
+  catch(e){setModalStatus('Gagal: '+e.message,false);log('Exception saat connect: '+e.message,'err');btn.disabled=false;btn.textContent='CONNECT MQTT';return;}
+  mqttClient.on('connect',()=>{
+    setModalStatus('Terhubung!',true); btn.disabled=false; btn.textContent='CONNECT MQTT';
+    setConnected(true,host+':'+port); enableModeSelector(true);
+    log('Connected to '+host+':'+port,'ok'); toast('MQTT Terhubung','ok');
+    mqttClient.subscribe([T.TELEMETRY,T.STATUS,T.HISTORY,T.DURATION],{qos:0},(err,granted)=>{
+      if(err){ log('Gagal subscribe: '+err.message,'err'); toast('Subscribe gagal: '+err.message,'err'); return; }
+      log('Subscribed: '+(granted||[]).map(g=>g.topic).join(', '),'ok');
+    });
+    setTimeout(()=>{hideModal();initChart();},800);
+    // Watchdog: kalau setelah 10 detik belum ada telemetri sama sekali,
+    // beri tahu user — biasanya berarti topic salah atau ESP32 belum publish.
+    noDataWatchdog=setTimeout(()=>{
+      if(!firstTelemetryReceived){
+        log('Belum ada data telemetri masuk setelah 10 detik. Cek: ESP32 sudah terhubung ke broker yang sama? Topic "'+T.TELEMETRY+'" benar? Username/password broker benar?','warn');
+        toast('Belum ada data masuk dari ESP32 — cek koneksi/topic','warn');
+      }
+    },10000);
+  });
+  mqttClient.on('reconnect',()=>{log('Mencoba reconnect MQTT...','warn');});
+  mqttClient.on('message',(topic,payload)=>{
+    const msg=payload.toString();
+    if(topic===T.TELEMETRY){
+      if(!firstTelemetryReceived){firstTelemetryReceived=true;if(noDataWatchdog)clearTimeout(noDataWatchdog);}
+      try{updateDashboard(JSON.parse(msg));}
+      catch(e){log('Gagal proses telemetri: '+e.message+' | payload: '+msg.slice(0,120),'err');}
+    }
+    else if(topic===T.STATUS){
+      log('Status: '+msg,'warn');
+      if(msg==='SETPOINT_REACHED') toast('Setpoint tercapai — durasi otomatis tersimpan ke history','ok');
+    }
+    else if(topic===T.HISTORY){
+      try{
+        const prevLen=historyData.length;
+        historyData=JSON.parse(msg);
+        renderHistoryTable();
+        if(historyData.length>prevLen){
+          const last=historyData[historyData.length-1];
+          if(last) toast(`Tersimpan: ${last.t0}°C → ${last.sp}°C (setpoint) dalam ${formatDurationSec(last.dur)}`, last.ok?'ok':'warn');
+        }
+      }catch(e){log('Gagal proses history: '+e.message,'err');}
+    }
+    else if(topic===T.DURATION){
+      try{durState=JSON.parse(msg);updateDurationDisplay();}
+      catch(e){log('Gagal proses duration: '+e.message,'err');}
+    }
+    else{ log('Topic tidak dikenali: '+topic+' → '+msg.slice(0,100),'info'); }
+  });
+  mqttClient.on('error',(err)=>{
+    setModalStatus('Error: '+err.message,false);log('MQTT error: '+err.message,'err');
+    btn.disabled=false;btn.textContent='CONNECT MQTT';setConnected(false);enableModeSelector(false);
+  });
+  mqttClient.on('close',()=>{log('Koneksi MQTT tertutup','warn');setConnected(false);enableModeSelector(false);});
+  mqttClient.on('offline',()=>{log('MQTT offline','warn');setConnected(false);enableModeSelector(false);});
+}
+function setConnected(ok,label=''){
+  document.getElementById('connDot').className='pulse-dot '+(ok?'green':'gray');
+  const lbl=document.getElementById('connLabel');
+  lbl.textContent=ok?('CONNECTED'+(label?' · '+label:'')):'DISCONNECTED';
+  lbl.style.color=ok?'#4ade80':'#64748b';
+}
+
+// ═══ DASHBOARD UPDATE ═══
+function updateDashboard(d){
+  const t=d.temperature, h=d.humidity;
+  const heater=d.heater_pct??0, fan=d.fan_pct??0;
+  const errT=d.error_temp??0, errH=d.error_humidity??0;
+  const spT=d.setpoint_temp??30, spH=d.setpoint_humidity??60;
+  const stT=d.status_temp??'---', stH=d.status_humidity??'---', stSys=d.status_system??'---';
+  const ctrl=d.control??false, mode=(d.mode??'PID').toUpperCase();
+  const spSrc=d.sp_source??'pot';
+
+  if(mode!==currentMode) updateModeUI(mode);
+
+  if(t!==undefined&&!isNaN(t)){document.getElementById('tempVal').textContent=t.toFixed(1);setGauge('tempGauge',t,0,60);setBar('tempBar',t,0,100);}
+  if(h!==undefined&&!isNaN(h)){document.getElementById('humVal').textContent=h.toFixed(1);setGauge('humGauge',h,0,100);setBar('humBar',h,0,100);}
+
+  document.getElementById('heaterVal').innerHTML=heater+'<span style="font-size:16px">%</span>';
+  setBar('heaterBar',heater,0,100);
+  const ssrDot=document.getElementById('ssrDot'), ssrSt=document.getElementById('ssrStatus');
+  if(heater>0&&ctrl){ssrDot.className='pulse-dot green';ssrDot.style.animation='';ssrSt.textContent='ACTIVE';ssrSt.style.color='#4ade80';}
+  else{ssrDot.className='pulse-dot gray';ssrDot.style.animation='none';ssrSt.textContent='IDLE';ssrSt.style.color='#64748b';}
+
+  document.getElementById('fanVal').innerHTML=fan+'<span style="font-size:16px">%</span>';
+  setBar('fanBar',fan,0,100); renderFanDots(fan);
+
+  if(mode==='FUZZY'){
+    const fo=d.fuzzy_output??d.control_output??null;
+    if(fo!==null){
+      document.getElementById('fuzzyOutVal').textContent=fo.toFixed(2);
+      document.getElementById('fuzzyOutPointer').style.left=((fo+85.26)/170.52*100)+'%';
+    }
+    document.getElementById('fuzzyHeaterMapped').textContent=heater+'%';
+  } else {
+    document.getElementById('pidOutVal').textContent=heater+'%';
+    document.getElementById('pidOutPointer').style.left=heater+'%';
+    if(d.pid_P!==undefined) document.getElementById('pidP').textContent=d.pid_P.toFixed(1);
+    if(d.pid_I!==undefined) document.getElementById('pidI').textContent=d.pid_I.toFixed(1);
+    if(d.pid_D!==undefined) document.getElementById('pidD').textContent=d.pid_D.toFixed(1);
+  }
+
+  document.getElementById('spTempVal').textContent=spT.toFixed(2)+'°C';
+  document.getElementById('spHumVal').textContent=spH.toFixed(2)+'%';
+  document.getElementById('errTempVal').textContent=(errT>=0?'+':'')+errT.toFixed(2)+' °C';
+  document.getElementById('errHumVal').textContent=(errH>=0?'+':'')+errH.toFixed(2)+' %';
+  document.getElementById('spHumInput').value=spH.toFixed(1);
+
+  setBadge('statusTemp',stT,'sm'); setBadge('statusHum',stH,'sm');
+  setBadge('sysStatusBadge',stSys,'lg'); setBadge('tempStatusBadge',stT,'lg'); setBadge('humStatusBadge',stH,'lg');
+
+  const spB=document.getElementById('spSourceBadge');
+  spB.textContent=spSrc==='dashboard'?'DASHBOARD':'POT/KNOB';
+  spB.className=(spSrc==='dashboard'?'badge-running':'badge-idle')+' px-3 py-1 rounded-lg';
+
+  document.getElementById('lastUpdate').textContent=new Date().toLocaleTimeString('id-ID');
+
+  // Duration dari telemetri ESP32
+  if(d.dur_aktif!==undefined){
+    durState.aktif=d.dur_aktif; durState.t0=d.dur_t0??0;
+    durState.dur=d.dur_detik??-1; durState.ok=d.dur_ok??false;
+    updateDurationDisplay(spT);
+  }
+
+  if(t!==undefined&&!isNaN(t)&&h!==undefined&&!isNaN(h)){
+    trendTemp.push(t); trendHum.push(h); trendLabels.push('');
+    if(trendTemp.length>MAX_TREND){trendTemp.shift();trendHum.shift();trendLabels.shift();}
+    drawChart();
+    csvData.push({waktu:new Date().toLocaleString('id-ID'),mode,setpoint:spT,suhu:t,kelembapan:h,heater,fan});
+    document.getElementById('csvCount').textContent=csvData.length+' record';
+  }
+  log(`[${mode}] T:${t?.toFixed(1)}°C H:${h?.toFixed(1)}% Heater:${heater}% Fan:${fan}%`,'ok');
+}
+
+// ═══ HELPERS ═══
+function setGauge(id,val,min,max){const el=document.getElementById(id);if(!el)return;const pct=Math.max(0,Math.min(1,(val-min)/(max-min)));el.style.strokeDashoffset=175.9*(1-pct);}
+function setBar(id,val,min,max){const el=document.getElementById(id);if(!el)return;el.style.width=Math.max(0,Math.min(100,(val-min)/(max-min)*100))+'%';}
+function setBadge(id,text,sz){
+  const el=document.getElementById(id); if(!el)return;
+  el.textContent=text;
+  const cls=sz==='lg'?'px-3 py-1 rounded-lg':'px-2 py-0.5 rounded-md';
+  const t=text.toUpperCase();
+  if(t==='OK'||t.startsWith('RUNNING')) el.className=cls+' badge-ok';
+  else if(t==='STANDBY')               el.className=cls+' badge-idle';
+  else if(t.includes('ERROR'))         el.className=cls+' badge-danger';
+  else                                  el.className=cls+' badge-warn';
+}
+function renderFanDots(pct){
+  const cont=document.getElementById('fanDots'); if(!cont)return;
+  const total=10,filled=Math.round(pct/100*total); cont.innerHTML='';
+  for(let i=0;i<total;i++){
+    const d=document.createElement('div');
+    d.style.cssText=`width:14px;height:6px;border-radius:2px;background:${i<filled?'rgba(34,211,238,.7)':'rgba(255,255,255,.06)'};transition:background .5s`;
+    cont.appendChild(d);
+  }
+}
+
+// ═══ COMMANDS ═══
+function reqConn(){if(!mqttClient||!mqttClient.connected){toast('Belum terhubung ke MQTT','warn');return false;}return true;}
+function sendCmd(cmd){if(!reqConn())return;mqttClient.publish(T.CMD_SYSTEM,cmd,{qos:1,retain:true});log('CMD: '+cmd,'warn');toast('Perintah '+cmd+' dikirim','ok');}
+function sendMode(mode){if(!reqConn())return;mqttClient.publish(T.CMD_MODE,mode,{qos:1,retain:true});log('MODE: '+mode,'warn');toast('Mode diubah ke '+mode,'ok');updateModeUI(mode);}
+function sendSetpointTemp(){if(!reqConn())return;const v=parseFloat(document.getElementById('spTempInput').value);if(isNaN(v)||v<0||v>120){toast('Setpoint tidak valid','err');return;}mqttClient.publish(T.CMD_SET_TEMP,v.toFixed(2),{qos:1,retain:true});log('SET Temp: '+v.toFixed(2)+'°C','warn');toast('SP Suhu: '+v.toFixed(2)+'°C','ok');}
+function sendSetpointHum(){if(!reqConn())return;const v=parseFloat(document.getElementById('spHumInput').value);if(isNaN(v)||v<0||v>100){toast('Setpoint tidak valid','err');return;}mqttClient.publish(T.CMD_SET_HUM,v.toFixed(2),{qos:1,retain:true});log('SET Hum: '+v.toFixed(2)+'%','warn');toast('SP Kelembaban: '+v.toFixed(2)+'%','ok');}
+
+// ═══ CSV ═══
+function downloadCSV(){
+  if(csvData.length===0){toast('Belum ada data','warn');return;}
+  const rows=['Waktu,Mode,Setpoint (°C),Suhu (°C),Kelembapan (%),Heater (%),Fan (%)'];
+  csvData.forEach(r=>rows.push(`"${r.waktu}",${r.mode},${r.setpoint},${r.suhu},${r.kelembapan},${r.heater},${r.fan}`));
+  const blob=new Blob([rows.join('\n')],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download=`nexaryn_fermentasi_${new Date().toISOString().replace(/[:.]/g,'-').slice(0,19)}.csv`;a.click();URL.revokeObjectURL(url);
+  toast(`CSV diunduh (${csvData.length} record)`,'ok');
+}
+function downloadSensorCSV(){
+  if(csvData.length===0){toast('Belum ada data sensor','warn');return;}
+  const rows=['waktu,suhu,setpoint,mode'];
+  csvData.forEach(r=>rows.push(`"${r.waktu}",${r.suhu},${r.setpoint},${r.mode}`));
+  const blob=new Blob([rows.join('\n')],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download=`nexaryn_data_histori_${new Date().toISOString().replace(/[:.]/g,'-').slice(0,19)}.csv`;a.click();URL.revokeObjectURL(url);
+  toast(`Data histori diunduh (${csvData.length} record)`,'ok');
+}
+function clearCSV(){csvData=[];document.getElementById('csvCount').textContent='0 record';toast('Data CSV dihapus','warn');}
+
+function downloadHistoryCSV(){
+  if(historyData.length===0){toast('Belum ada data history','warn');return;}
+  const rows=['Uptime ESP32,Mode,Setpoint (°C),Suhu Awal (°C),Suhu Akhir (°C),Durasi (detik),Durasi (format),Tercapai'];
+  historyData.forEach(r=>{
+    const durFmt=formatDurationSec(r.dur);
+    rows.push(`"${r.waktu}",${r.mode},${r.sp},${r.t0},${r.t1},${r.dur},"${durFmt}",${r.ok?'YA':'TIDAK'}`);
+  });
+  const blob=new Blob([rows.join('\n')],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download=`nexaryn_history_${new Date().toISOString().replace(/[:.]/g,'-').slice(0,19)}.csv`;a.click();URL.revokeObjectURL(url);
+  toast(`History CSV diunduh (${historyData.length} entri)`,'ok');
+}
+
+function renderHistoryTable(){
+  const el=document.getElementById('historyTableBody'); if(!el)return;
+  el.innerHTML='';
+  const data=[...historyData].reverse();
+  if(data.length===0){el.innerHTML='<tr><td colspan="7" style="color:#475569;text-align:center;padding:12px">Belum ada history</td></tr>';return;}
+  data.forEach(r=>{
+    const tercapai=r.ok;
+    const tr=document.createElement('tr');
+    tr.innerHTML=`
+      <td style="padding:6px 8px;color:#94a3b8;font-size:10px;white-space:nowrap">${r.waktu}</td>
+      <td style="padding:6px 8px"><span class="${r.mode==='FUZZY'?'badge-fuzzy':'badge-running'} px-2 py-0.5 rounded-md" style="font-size:9px">${r.mode}</span></td>
+      <td style="padding:6px 8px;color:#22d3ee;font-size:11px">${r.sp}°C</td>
+      <td style="padding:6px 8px;color:#e2e8f0;font-size:11px">${r.t0}°C → ${r.sp}°C</td>
+      <td style="padding:6px 8px;font-family:'Orbitron',sans-serif;font-size:11px;color:${tercapai?'#22d3ee':'#facc15'}">${formatDurationSec(r.dur)}</td>
+      <td style="padding:6px 8px"><span class="${tercapai?'badge-ok':'badge-warn'} px-2 py-0.5 rounded-md" style="font-size:9px">${tercapai?'✓ YA':'✗ TIDAK'}</span></td>
+    `;
+    el.appendChild(tr);
+  });
+  document.getElementById('historyCount').textContent=historyData.length+' entri';
+}
+function resetDuration(){if(!reqConn()){toast('Hubungkan MQTT dulu','warn');return;}mqttClient.publish(T.CMD_CLEARLOG,'1',{qos:1,retain:false});toast('Log & durasi direset via ESP32','warn');}
+
+// ═══ DURATION DISPLAY ═══
+function formatDuration(ms){
+  if(ms===null||ms===undefined)return '--';
+  const s=Math.floor(ms/1000),m=Math.floor(s/60),h=Math.floor(m/60);
+  if(h>0) return h+'j '+(m%60)+'m '+(s%60)+'d';
+  if(m>0) return m+'m '+(s%60)+'d';
+  return s+'d';
+}
+function formatDurationSec(sec){
+  if(sec===null||sec===undefined||sec<0)return '--';
+  const s=Math.floor(sec),m=Math.floor(s/60),h=Math.floor(m/60);
+  if(h>0) return h+'j '+(m%60)+'m '+(s%60)+'d';
+  if(m>0) return m+'m '+(s%60)+'d';
+  return s+'d';
+}
+function updateDurationDisplay(spT){
+  const el=document.getElementById('durationInfo'); if(!el)return;
+  if(!durState.aktif&&durState.dur<0){el.innerHTML='<span style="color:#64748b">Menunggu kontrol aktif...</span>';return;}
+  const durSec=durState.dur>=0?durState.dur:0;
+  const startTxt=durState.t0?durState.t0.toFixed(1)+'°C':'--';
+  const spTxt=spT!==undefined?spT.toFixed(1)+'°C':'--';
+  if(durState.ok){
+    el.innerHTML=`<span style="color:#4ade80">&#10003; Setpoint tercapai!</span> <span style="color:#94a3b8">${startTxt} → <span style="color:#22d3ee">${spTxt}</span> (setpoint)</span> <span style="color:#22d3ee;font-family:'Orbitron',sans-serif">${formatDurationSec(durSec)}</span>`;
+  } else {
+    el.innerHTML=`<span style="color:#94a3b8">Suhu awal: ${startTxt} → SP <span style="color:#c084fc">${spTxt}</span> &nbsp;|&nbsp; Durasi: </span><span style="color:#facc15;font-family:'Orbitron',sans-serif">${formatDurationSec(durSec)}</span>`;
+  }
+}
+
+// ═══ CHART ═══
+function initChart(){
+  chartCanvas=document.getElementById('trendChart'); if(!chartCanvas)return;
+  chartCtx=chartCanvas.getContext('2d');
+  const dpr=window.devicePixelRatio||1;
+  const parentW=chartCanvas.parentElement.getBoundingClientRect().width||chartCanvas.parentElement.offsetWidth||400;
+  const W=Math.max(parentW-40,200);
+  chartCanvas.width=W*dpr; chartCanvas.height=120*dpr;
+  chartCanvas.style.width=W+'px'; chartCanvas.style.height='120px';
+  chartCtx.scale(dpr,dpr); drawChart();
+}
+function drawChart(){
+  if(!chartCtx||!chartCanvas)return;
+  const dpr=window.devicePixelRatio||1;
+  const ctx=chartCtx,W=chartCanvas.width/dpr,H=chartCanvas.height/dpr;
+  ctx.clearRect(0,0,W,H);
+  if(trendTemp.length<2){ctx.fillStyle='rgba(100,116,139,.4)';ctx.font='11px JetBrains Mono';ctx.textAlign='center';ctx.fillText('Menunggu data...',W/2,H/2);return;}
+  const pad={t:10,b:20,l:36,r:10},cW=W-pad.l-pad.r,cH=H-pad.t-pad.b;
+  ctx.strokeStyle='rgba(255,255,255,.04)';ctx.lineWidth=1;
+  for(let i=0;i<=4;i++){const y=pad.t+(cH/4)*i;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(pad.l+cW,y);ctx.stroke();}
+  function drawLine(data,minV,maxV,color){
+    if(data.length<2)return;
+    const grad=ctx.createLinearGradient(pad.l,0,pad.l+cW,0);
+    grad.addColorStop(0,color+'88');grad.addColorStop(1,color+'ff');
+    ctx.strokeStyle=grad;ctx.lineWidth=2;ctx.lineJoin='round';ctx.lineCap='round';ctx.beginPath();
+    data.forEach((v,i)=>{const x=pad.l+(i/(MAX_TREND-1))*cW,y=pad.t+cH-((v-minV)/(maxV-minV))*cH;i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});
+    ctx.shadowColor=color;ctx.shadowBlur=6;ctx.stroke();ctx.shadowBlur=0;
+    ctx.beginPath();
+    data.forEach((v,i)=>{const x=pad.l+(i/(MAX_TREND-1))*cW,y=pad.t+cH-((v-minV)/(maxV-minV))*cH;i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});
+    ctx.lineTo(pad.l+((data.length-1)/(MAX_TREND-1))*cW,pad.t+cH);ctx.lineTo(pad.l,pad.t+cH);ctx.closePath();
+    const ag=ctx.createLinearGradient(0,pad.t,0,pad.t+cH);ag.addColorStop(0,color+'22');ag.addColorStop(1,color+'00');ctx.fillStyle=ag;ctx.fill();
+  }
+  const minT=Math.min(...trendTemp)-2,maxT=Math.max(...trendTemp)+2;
+  const minH=Math.min(...trendHum)-5,maxH=Math.max(...trendHum)+5;
+  drawLine(trendTemp,minT,maxT,'#e879f9');drawLine(trendHum,minH,maxH,'#22d3ee');
+  ctx.fillStyle='rgba(100,116,139,.7)';ctx.font='9px JetBrains Mono';ctx.textAlign='right';
+  ctx.fillText(maxT.toFixed(0)+'°',pad.l-4,pad.t+4);ctx.fillText(minT.toFixed(0)+'°',pad.l-4,pad.t+cH+4);
+}
+
+// ═══ INIT ═══
+window.addEventListener('load',()=>{
+  showModal();
+  setTimeout(()=>initChart(),100);
+  window.addEventListener('resize',()=>setTimeout(()=>initChart(),200));
+  renderFanDots(0); updateModeUI('PID'); enableModeSelector(false); renderHistoryTable();
+});
+</script>
+</body>
+</html>
