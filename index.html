@@ -95,6 +95,27 @@
 <body>
 <div class="bg-canvas"></div>
 
+<!-- AUTO-DOWNLOAD OVERLAY (muncul hanya jika dibuka via HTTPS, mis. GitHub Pages) -->
+<div id="downloadOverlay" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <div class="flex items-center gap-3 mb-4">
+      <div class="w-10 h-10 rounded-xl flex items-center justify-center" style="background:linear-gradient(135deg,#7c3aed,#0891b2)">
+        <span style="font-size:20px">&#x2B07;</span>
+      </div>
+      <h2 style="font-family:'Orbitron',sans-serif;font-size:16px;font-weight:700;color:#fff">Mengunduh dashboard...</h2>
+    </div>
+    <p style="font-size:13px;color:#cbd5e1;line-height:1.6;margin:0 0 12px">
+      Halaman ini dibuka lewat <b>HTTPS</b>, jadi browser memblokir koneksi <code style="color:#f87171">ws://</code> biasa ke broker MQTT kamu (mixed content).
+    </p>
+    <p style="font-size:13px;color:#cbd5e1;line-height:1.6;margin:0 0 12px">
+      File <b>index.html</b> sedang diunduh otomatis ke folder Downloads. <b>Buka file itu langsung</b> (klik dua kali / seret ke browser) — saat dibuka secara lokal, broker WS biasa akan berfungsi normal.
+    </p>
+    <p id="downloadStatus" style="font-size:12px;color:#22d3ee;margin:0 0 16px">Menyiapkan unduhan...</p>
+    <button class="btn-connect" onclick="unduhUlangManual()">&#x21BB; UNDUH ULANG</button>
+    <button class="btn-connect mt-2" style="background:transparent;border:1px solid rgba(255,255,255,.15);box-shadow:none" onclick="document.getElementById('downloadOverlay').style.display='none';showModal();">Lewati &amp; coba sambung langsung (WSS)</button>
+  </div>
+</div>
+
 <!-- MQTT MODAL -->
 <div id="mqttModal" class="modal-overlay">
   <div class="modal-box">
@@ -541,6 +562,44 @@ function loadSavedCreds(){
 }
 function showModal(){document.getElementById('mqttModal').style.display='flex';}
 function hideModal(){document.getElementById('mqttModal').style.display='none';}
+
+// ═══ AUTO-DOWNLOAD SAAT DIAKSES VIA HTTPS ═══
+// Browser blokir ws:// (mixed content) dari halaman HTTPS. Solusinya: begitu
+// halaman dimuat lewat HTTPS (mis. GitHub Pages), unduh otomatis index.html
+// ini ke komputer pengguna, supaya bisa dibuka secara LOKAL (file://) — di
+// mana browser TIDAK menerapkan pembatasan mixed-content, jadi ws:// biasa
+// (broker tanpa TLS) bisa langsung dipakai tanpa perlu setup WSS/sertifikat.
+function unduhDiriSendiri(){
+  const statusEl=document.getElementById('downloadStatus');
+  fetch(location.href,{cache:'no-store'})
+    .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.text(); })
+    .then(html=>{
+      const blob=new Blob([html],{type:'text/html'});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url; a.download='index.html';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),2000);
+      if(statusEl) statusEl.textContent='✓ Selesai diunduh. Buka file dari folder Downloads.';
+    })
+    .catch(err=>{
+      if(statusEl) statusEl.textContent='Gagal unduh otomatis: '+err.message+' — coba tombol "UNDUH ULANG".';
+    });
+}
+function unduhUlangManual(){
+  const statusEl=document.getElementById('downloadStatus');
+  if(statusEl) statusEl.textContent='Menyiapkan unduhan...';
+  unduhDiriSendiri();
+}
+function cekDanUnduhJikaHTTPS(){
+  if(location.protocol==='https:'){
+    document.getElementById('downloadOverlay').style.display='flex';
+    unduhDiriSendiri();
+  } else {
+    showModal();
+  }
+}
+
 function setModalStatus(msg,ok=null){
   const el=document.getElementById('modalStatus'); el.classList.remove('hidden');
   el.textContent=msg;
@@ -867,7 +926,7 @@ function drawChart(){
 
 // ═══ INIT ═══
 window.addEventListener('load',()=>{
-  showModal();
+  cekDanUnduhJikaHTTPS();
   setTimeout(()=>initChart(),100);
   window.addEventListener('resize',()=>setTimeout(()=>initChart(),200));
   renderFanDots(0); updateModeUI('PID'); enableModeSelector(false); renderHistoryTable();
